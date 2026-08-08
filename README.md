@@ -2,7 +2,7 @@
 
 Anonymous code release accompanying the LoG 2026 Extended Abstract submission.
 
-**GitHub:** [Luca0116/HSCN-LOG2026-EA](https://github.com/Luca0116/HSCN-LOG2026-EA)
+For double-blind review, share this tree via [Anonymous GitHub](https://anonymous.4open.science/) (do not put a personal repository URL in the paper).
 
 This repository implements **HSCN** for **TU graph classification**: topology is mapped into the Poincaré disk with a Sarkar-style BFS embedding, node signals are filtered with Helgason–Fourier spectral convolution (multi-scale heat multipliers), and graphs are pooled with mean / sum / layerwise hybrid readout before an MLP classifier.
 
