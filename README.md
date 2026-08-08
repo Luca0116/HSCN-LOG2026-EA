@@ -132,4 +132,4 @@ Please cite the accompanying LoG 2026 Extended Abstract (details upon publicatio
 
 ## License
 
-See [LICENSE](LICENSE).
+See `LICENSE`.
