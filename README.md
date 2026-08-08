@@ -2,11 +2,7 @@
 
 Anonymous code release for the LoG 2026 Extended Abstract.
 
-<<<<<<< HEAD
-This repository implements **HSCN** for **TU graph classification**: topology is mapped into the Poincaré disk with a Sarkar-style BFS embedding, node signals are filtered with Helgason–Fourier spectral convolution (multi-scale heat multipliers), and graphs are pooled with mean / sum / layerwise hybrid readout before an MLP classifier.
-=======
 Topology is mapped to a **Sarkar-inspired BFS-tree hyperbolic support** on the Poincaré disk; node features are ordinary Euclidean signals filtered by Helgason–Fourier spectral convolution (multi-scale heat multipliers), then pooled and classified by an MLP.
->>>>>>> ab8d9d4 (Align paper protocol: flat/euclidean ablations, five-seed runner, test-at-end.)
 
 ## Method (paper)
 
