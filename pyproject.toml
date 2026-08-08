@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hscn"
+version = "0.1.0"
+description = "Hyperbolic Spectral Convolutional Network for graph classification"
+requires-python = ">=3.9"
+dependencies = [
+  "torch>=2.1",
+  "numpy>=1.23",
+  "PyYAML>=6.0",
+  "tqdm>=4.65",
+  "torch-geometric>=2.4",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hscn*"]

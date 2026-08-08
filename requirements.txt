@@ -1,0 +1,8 @@
+torch>=2.1
+numpy>=1.23
+PyYAML>=6.0
+tqdm>=4.65
+# Install a CUDA-matched PyTorch Geometric build for your platform, e.g.:
+#   pip install torch-geometric
+# See https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html
+torch-geometric>=2.4
