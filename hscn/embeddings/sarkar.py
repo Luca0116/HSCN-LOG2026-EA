@@ -10,7 +10,7 @@ import torch
 if TYPE_CHECKING:
     from torch_geometric.data import Data
 
-# Sarkar BFS tree embedding uses the 2D Poincare disk (polar coordinates).
+# BFS-tree support uses the 2D disk (polar coordinates).
 SARKAR_BALL_DIM = 2
 
 
@@ -177,9 +177,14 @@ def sarkar_embedding(
     dtype: torch.dtype = torch.float32,
     device: Optional[torch.device] = None,
 ) -> torch.Tensor:
-    """Topology-only Sarkar-style BFS tree hyperbolic embedding."""
+    """Deterministic BFS-tree hyperbolic embedding inspired by Sarkar's construction.
+
+    Radial coordinate from BFS depth; angular sectors from subtree mass.
+    This is a topology-induced Poincaré support, not the recursive isometric
+    placement of the original Sarkar algorithm.
+    """
     if dim < 2:
-        raise ValueError("Sarkar embedding needs dim >= 2.")
+        raise ValueError("Hyperbolic BFS embedding needs dim >= 2.")
     if radius <= 0:
         raise ValueError("radius must be positive.")
     if tau <= 0:
@@ -208,6 +213,37 @@ def sarkar_embedding(
     return z
 
 
+def euclidean_tree_embedding(
+    edge_index: torch.Tensor,
+    num_nodes: int,
+    dim: int = 2,
+    tau: float = 1.0,
+    root: Optional[int] = None,
+    dtype: torch.dtype = torch.float32,
+    device: Optional[torch.device] = None,
+) -> torch.Tensor:
+    """Flat analogue: same BFS angles, Euclidean radius = tau * depth."""
+    if dim < 2:
+        raise ValueError("Euclidean tree embedding needs dim >= 2.")
+    if tau <= 0:
+        raise ValueError("tau must be positive.")
+    if num_nodes <= 0:
+        raise ValueError("num_nodes must be positive.")
+
+    if device is None:
+        device = edge_index.device
+
+    depth_tensor, theta_tensor = _bfs_layout_angles_and_depths(
+        edge_index, num_nodes, root, dtype, device
+    )
+    radial = tau * depth_tensor
+
+    z = torch.zeros(num_nodes, dim, dtype=dtype, device=device)
+    z[:, 0] = radial * torch.cos(theta_tensor)
+    z[:, 1] = radial * torch.sin(theta_tensor)
+    return z
+
+
 def _sarkar_worker(payload: Tuple[torch.Tensor, int, float, float, Optional[int]]) -> torch.Tensor:
     edge_index, num_nodes, tau, radius, root = payload
     return sarkar_embedding(
@@ -215,6 +251,19 @@ def _sarkar_worker(payload: Tuple[torch.Tensor, int, float, float, Optional[int]
         num_nodes=num_nodes,
         dim=SARKAR_BALL_DIM,
         radius=radius,
+        tau=tau,
+        root=root,
+        dtype=torch.float32,
+        device=torch.device("cpu"),
+    )
+
+
+def _euclidean_worker(payload: Tuple[torch.Tensor, int, float, Optional[int]]) -> torch.Tensor:
+    edge_index, num_nodes, tau, root = payload
+    return euclidean_tree_embedding(
+        edge_index=edge_index,
+        num_nodes=num_nodes,
+        dim=SARKAR_BALL_DIM,
         tau=tau,
         root=root,
         dtype=torch.float32,
@@ -230,12 +279,7 @@ def precompute_sarkar_for_graphs(
     num_workers: int = 0,
     verbose: bool = False,
 ) -> None:
-    """
-    Attach fixed Sarkar positions to each graph as ``data.z``.
-
-    Positions depend only on topology and hyperparameters, so they are computed
-    once at load time instead of on every training forward pass.
-    """
+    """Attach fixed hyperbolic BFS-tree positions to each graph as ``data.z``."""
     if len(graphs) == 0:
         return
 
@@ -255,6 +299,38 @@ def precompute_sarkar_for_graphs(
 
     if verbose:
         print(
-            f"precomputed Sarkar z for {len(graphs)} graphs "
+            f"precomputed hyperbolic BFS-tree z for {len(graphs)} graphs "
             f"(tau={tau}, radius={radius}, workers={max(num_workers, 1)})"
+        )
+
+
+def precompute_euclidean_for_graphs(
+    graphs: Sequence["Data"],
+    tau: float = 0.5,
+    root: Optional[int] = None,
+    num_workers: int = 0,
+    verbose: bool = False,
+) -> None:
+    """Attach fixed Euclidean BFS-tree positions to each graph as ``data.z``."""
+    if len(graphs) == 0:
+        return
+
+    payloads = [
+        (graph.edge_index.cpu(), int(graph.num_nodes), float(tau), root)
+        for graph in graphs
+    ]
+
+    if num_workers and num_workers > 1:
+        with ProcessPoolExecutor(max_workers=num_workers) as pool:
+            positions = list(pool.map(_euclidean_worker, payloads))
+    else:
+        positions = [_euclidean_worker(payload) for payload in payloads]
+
+    for graph, z in zip(graphs, positions):
+        graph.z = z
+
+    if verbose:
+        print(
+            f"precomputed Euclidean BFS-tree z for {len(graphs)} graphs "
+            f"(tau={tau}, workers={max(num_workers, 1)})"
         )

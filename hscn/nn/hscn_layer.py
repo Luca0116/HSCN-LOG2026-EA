@@ -1,30 +1,35 @@
-"""Hyperbolic Helgason–Fourier spectral convolution layer (paper)."""
+"""Helgason–Fourier / Euclidean-Fourier spectral convolution layer (paper)."""
 
 from __future__ import annotations
-
-from typing import Optional
 
 import torch
 from torch import nn
 
-from hscn.nn.helgason import helgason_plane_wave
+from hscn.nn.helgason import euclidean_plane_wave, helgason_plane_wave
 from hscn.nn.quadrature import (
     make_lambda_quadrature,
     make_sphere_quadrature,
     make_diffusion_scales,
 )
 
+GEOMETRY_MODES = frozenset({"hyperbolic", "euclidean"})
+MULTIPLIER_MODES = frozenset({"full", "flat"})
+
 
 class HSCNLayer(nn.Module):
     """
-    Hyperbolic spectral convolution with multi-scale heat filters.
+    Spectral convolution with multi-scale heat filters.
 
     Pipeline:
-        Helgason analysis → heat spectral multiplier → synthesis → re/im mix
+        plane-wave analysis → spectral multiplier → synthesis → re/im mix
 
-    Paper defaults (forced):
-        hyperbolic geometry, complex_pair_mode=reim, norm_mode=pre,
-        fixed diffusion scales, full multi-scale heat response.
+    ``geometry_mode``:
+        hyperbolic — Helgason waves on a Poincaré support; η = λ² + (1-σ)²/t²
+        euclidean  — Fourier waves on a flat BFS-tree support; η = λ²
+
+    ``multiplier_mode``:
+        full — Σ_k α_ijk exp(-ρ_k η(λ))
+        flat — Σ_k α_ijk  (frequency-independent; paper ablation)
     """
 
     def __init__(
@@ -46,10 +51,10 @@ class HSCNLayer(nn.Module):
         activation: str = "gelu",
         complex_pair_mode: str = "reim",
         norm_mode: str = "pre",
-        **_kwargs,
+        geometry_mode: str = "hyperbolic",
+        multiplier_mode: str = "full",
     ) -> None:
         super().__init__()
-        del _kwargs  # ignore unused legacy YAML keys
 
         if learnable_scales:
             raise ValueError(
@@ -65,6 +70,16 @@ class HSCNLayer(nn.Module):
             raise ValueError(
                 f"Paper release requires norm_mode='pre', got {norm_mode!r}"
             )
+        if geometry_mode not in GEOMETRY_MODES:
+            raise ValueError(
+                f"geometry_mode must be one of {sorted(GEOMETRY_MODES)}, "
+                f"got {geometry_mode!r}"
+            )
+        if multiplier_mode not in MULTIPLIER_MODES:
+            raise ValueError(
+                f"multiplier_mode must be one of {sorted(MULTIPLIER_MODES)}, "
+                f"got {multiplier_mode!r}"
+            )
 
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -78,6 +93,8 @@ class HSCNLayer(nn.Module):
         self.scale_mode = scale_mode
         self.complex_pair_mode = "reim"
         self.norm_mode = "pre"
+        self.geometry_mode = geometry_mode
+        self.multiplier_mode = multiplier_mode
 
         lambdas, lambda_weights = make_lambda_quadrature(
             num_lambdas=num_lambdas,
@@ -130,18 +147,27 @@ class HSCNLayer(nn.Module):
         return self.fixed_scales
 
     def _heat_eta(self, lambdas: torch.Tensor) -> torch.Tensor:
-        """Radial spectral symbol η(λ) = λ² + (1-σ)² / t²."""
+        """Radial spectral symbol η(λ)."""
+        if self.geometry_mode == "euclidean":
+            return lambdas.pow(2)
         return lambdas.pow(2) + ((1.0 - self.sigma) ** 2) / (self.radius ** 2)
 
     def spectral_response(self) -> torch.Tensor:
-        """Multi-scale heat filter g_hat[m, i, j]."""
+        """Filter g_hat[m, i, j] for ``multiplier_mode`` in {full, flat}."""
         lambdas = self.lambdas
+        alpha = self.alpha
+
+        if self.multiplier_mode == "flat":
+            # Parameter-matched flat multiplier: M(λ) = Σ_k α_ijk
+            a_sum = alpha.sum(dim=-1)  # [I, O]
+            return a_sum.unsqueeze(0).expand(lambdas.size(0), -1, -1).contiguous()
+
         scales = self.diffusion_scales()
         eta = self._heat_eta(lambdas)
         basis = torch.exp(-eta[:, None] * scales[None, :])
-        return torch.einsum("iok,mk->mio", self.alpha, basis)
+        return torch.einsum("iok,mk->mio", alpha, basis)
 
-    def _forward_helgason(
+    def _forward_analysis(
         self,
         h: torch.Tensor,
         omega: torch.Tensor,
@@ -151,12 +177,7 @@ class HSCNLayer(nn.Module):
         omega_complex = omega.to(dtype=e_neg.dtype)
         return torch.einsum("n,ni,nmr->mri", omega_complex, h_complex, e_neg)
 
-    def forward(
-        self,
-        h: torch.Tensor,
-        z: torch.Tensor,
-        node_weight: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+    def forward(self, h: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         if h.dim() != 2:
             raise ValueError(f"h should have shape [N, d_in], got {tuple(h.shape)}")
         if z.dim() != 2:
@@ -174,29 +195,32 @@ class HSCNLayer(nn.Module):
 
         num_nodes = h.size(0)
         h_spectral = self.norm(h)
+        omega = torch.full(
+            (num_nodes,),
+            1.0 / max(num_nodes, 1),
+            dtype=h.dtype,
+            device=h.device,
+        )
 
-        if node_weight is None:
-            omega = torch.full(
-                (num_nodes,),
-                1.0 / max(num_nodes, 1),
-                dtype=h.dtype,
-                device=h.device,
+        if self.geometry_mode == "euclidean":
+            e_pos = euclidean_plane_wave(
+                x=z,
+                lambdas=self.lambdas.to(z.device),
+                directions=self.directions.to(z.device),
+                sign=1,
             )
         else:
-            omega = node_weight.to(device=h.device, dtype=h.dtype)
-            omega = omega / omega.sum().clamp_min(1e-12)
-
-        e_pos = helgason_plane_wave(
-            z=z,
-            lambdas=self.lambdas.to(z.device),
-            directions=self.directions.to(z.device),
-            radius=self.radius,
-            sign=1,
-        )
+            e_pos = helgason_plane_wave(
+                z=z,
+                lambdas=self.lambdas.to(z.device),
+                directions=self.directions.to(z.device),
+                radius=self.radius,
+                sign=1,
+            )
         e_neg = e_pos.conj()
 
         g_hat = self.spectral_response().to(device=h.device, dtype=e_neg.dtype)
-        f_hat = self._forward_helgason(h_spectral, omega, e_neg)
+        f_hat = self._forward_analysis(h_spectral, omega, e_neg)
         pair_hat = torch.einsum("mri,mij->mrij", f_hat, g_hat)
 
         inv_weight = (

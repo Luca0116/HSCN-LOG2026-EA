@@ -8,7 +8,11 @@ import torch
 from torch import nn
 from torch_geometric.utils import subgraph
 
-from hscn.embeddings.sarkar import sarkar_embedding, SARKAR_BALL_DIM
+from hscn.embeddings.sarkar import (
+    SARKAR_BALL_DIM,
+    euclidean_tree_embedding,
+    sarkar_embedding,
+)
 from hscn.nn.mlp import MLP
 from hscn.nn.graph_readout import (
     GraphReadout,
@@ -16,7 +20,7 @@ from hscn.nn.graph_readout import (
     layerwise_mean_max_pool,
     layerwise_readout_dim,
 )
-from hscn.nn.hscn_layer import HSCNLayer
+from hscn.nn.hscn_layer import GEOMETRY_MODES, HSCNLayer, MULTIPLIER_MODES
 
 CLASSIFIER_MODES = frozenset({"mlp"})
 
@@ -110,8 +114,14 @@ def encode_batched_positions(
     root: Optional[int],
     dtype: torch.dtype,
     device: torch.device,
+    geometry_mode: str = "hyperbolic",
 ) -> torch.Tensor:
-    """Compute per-graph Sarkar Poincare positions for a PyG batch."""
+    """Compute per-graph BFS-tree support positions for a PyG batch."""
+    if geometry_mode not in GEOMETRY_MODES:
+        raise ValueError(
+            f"geometry_mode must be one of {sorted(GEOMETRY_MODES)}, "
+            f"got {geometry_mode!r}"
+        )
     num_nodes = batch.size(0)
     z = torch.zeros(num_nodes, ball_dim, dtype=dtype, device=device)
     num_graphs = int(batch.max().item()) + 1 if batch.numel() > 0 else 0
@@ -128,16 +138,27 @@ def encode_batched_positions(
             relabel_nodes=True,
             num_nodes=num_nodes,
         )
-        z_sub = sarkar_embedding(
-            edge_index=sub_edge_index,
-            num_nodes=node_idx.numel(),
-            dim=SARKAR_BALL_DIM,
-            radius=radius,
-            tau=tau,
-            root=root,
-            dtype=dtype,
-            device=device,
-        )
+        if geometry_mode == "euclidean":
+            z_sub = euclidean_tree_embedding(
+                edge_index=sub_edge_index,
+                num_nodes=node_idx.numel(),
+                dim=SARKAR_BALL_DIM,
+                tau=tau,
+                root=root,
+                dtype=dtype,
+                device=device,
+            )
+        else:
+            z_sub = sarkar_embedding(
+                edge_index=sub_edge_index,
+                num_nodes=node_idx.numel(),
+                dim=SARKAR_BALL_DIM,
+                radius=radius,
+                tau=tau,
+                root=root,
+                dtype=dtype,
+                device=device,
+            )
         z[node_idx] = z_sub
 
     return z
@@ -181,22 +202,23 @@ class HSCNGraphClassifier(nn.Module):
         norm_mode: str = "pre",
         sarkar_tau: float = 0.5,
         sarkar_root: Optional[int] = None,
-        feature_mode: str = "direct_conv",
+        feature_mode: str = "mlp",
         readout_mode: str = "mean",
         readout_dropout: Optional[float] = None,
         classifier_mode: str = "mlp",
-        classifier_num_layers: int = 2,
+        classifier_num_hidden_layers: int = 2,
+        classifier_num_layers: Optional[int] = None,
         classifier_hidden_dim: Optional[int] = None,
         complex_pair_mode: str = "reim",
-        use_post_conv_mlp: bool = False,
+        use_post_conv_mlp: bool = True,
         post_conv_mlp_hidden_dim: Optional[int] = None,
         post_conv_dropout: Optional[float] = None,
         layer_hidden_dims: Optional[Union[str, Sequence[int]]] = None,
         channel_pattern: Optional[str] = None,
-        **_kwargs,
+        geometry_mode: str = "hyperbolic",
+        multiplier_mode: str = "full",
     ) -> None:
         super().__init__()
-        del _kwargs  # ignore legacy YAML keys
 
         if feature_mode not in {"mlp", "direct_conv"}:
             raise ValueError(
@@ -226,11 +248,24 @@ class HSCNGraphClassifier(nn.Module):
                 "Paper release uses fixed diffusion scales "
                 "(learnable_scales must be False)."
             )
+        if geometry_mode not in GEOMETRY_MODES:
+            raise ValueError(
+                f"geometry_mode must be one of {sorted(GEOMETRY_MODES)}, "
+                f"got {geometry_mode!r}"
+            )
+        if multiplier_mode not in MULTIPLIER_MODES:
+            raise ValueError(
+                f"multiplier_mode must be one of {sorted(MULTIPLIER_MODES)}, "
+                f"got {multiplier_mode!r}"
+            )
         if ball_dim != SARKAR_BALL_DIM:
             raise ValueError(
-                f"Sarkar topology embedding is {SARKAR_BALL_DIM}D; ball_dim must be "
+                f"BFS-tree support embedding is {SARKAR_BALL_DIM}D; ball_dim must be "
                 f"{SARKAR_BALL_DIM}, got {ball_dim}."
             )
+
+        if classifier_num_layers is not None:
+            classifier_num_hidden_layers = int(classifier_num_layers)
 
         if layer_hidden_dims is not None and channel_pattern not in (
             None,
@@ -270,13 +305,17 @@ class HSCNGraphClassifier(nn.Module):
         self.readout_mode = readout_mode
         self.norm_mode = "pre"
         self.classifier_mode = "mlp"
-        self.classifier_num_layers = max(0, int(classifier_num_layers))
+        self.classifier_num_hidden_layers = max(1, int(classifier_num_hidden_layers))
+        # Legacy alias kept for YAML / summary compatibility.
+        self.classifier_num_layers = self.classifier_num_hidden_layers
         self.classifier_hidden_dim = (
             last_dim if classifier_hidden_dim is None else int(classifier_hidden_dim)
         )
         self.complex_pair_mode = "reim"
         self.use_post_conv_mlp = use_post_conv_mlp
         self.sigma = float(sigma)
+        self.geometry_mode = geometry_mode
+        self.multiplier_mode = multiplier_mode
 
         pool_dropout = dropout if readout_dropout is None else readout_dropout
         conv_dropout = dropout if conv_dropout is None else conv_dropout
@@ -317,6 +356,8 @@ class HSCNGraphClassifier(nn.Module):
                     activation=activation,
                     norm_mode="pre",
                     complex_pair_mode="reim",
+                    geometry_mode=geometry_mode,
+                    multiplier_mode=multiplier_mode,
                 )
                 for in_ch, out_ch in zip(layer_in_channels, layer_out_channels)
             ]
@@ -365,7 +406,7 @@ class HSCNGraphClassifier(nn.Module):
         self.classifier = self._build_classifier_head(
             readout_dim=readout_dim,
             num_classes=num_classes,
-            classifier_num_layers=self.classifier_num_layers,
+            classifier_num_hidden_layers=self.classifier_num_hidden_layers,
             classifier_hidden_dim=self.classifier_hidden_dim,
             activation=activation,
             dropout=classifier_dropout,
@@ -375,12 +416,12 @@ class HSCNGraphClassifier(nn.Module):
     def _build_classifier_head(
         readout_dim: int,
         num_classes: int,
-        classifier_num_layers: int,
+        classifier_num_hidden_layers: int,
         classifier_hidden_dim: int,
         activation: str,
         dropout: float,
     ) -> nn.Module:
-        n_hidden = max(1, classifier_num_layers)
+        n_hidden = max(1, classifier_num_hidden_layers)
         dims = [readout_dim] + [classifier_hidden_dim] * n_hidden + [num_classes]
         return nn.Sequential(
             nn.LayerNorm(readout_dim),
@@ -436,6 +477,7 @@ class HSCNGraphClassifier(nn.Module):
                 root=self.sarkar_root,
                 dtype=x.dtype,
                 device=x.device,
+                geometry_mode=self.geometry_mode,
             )
         num_graphs = int(batch.max().item()) + 1
         h_parts = []
@@ -470,6 +512,7 @@ class HSCNGraphClassifier(nn.Module):
                 root=self.sarkar_root,
                 dtype=x.dtype,
                 device=x.device,
+                geometry_mode=self.geometry_mode,
             )
 
         num_graphs = int(batch.max().item()) + 1

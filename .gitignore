@@ -13,17 +13,12 @@ runs/
 logs/
 outputs/
 *.pt
-!data/**/processed/*.pt
+
+# downloaded TU data (auto-fetched by PyG)
+data/*
+!data/.gitkeep
 
 # editor / OS
 .idea/
 .vscode/
 .DS_Store
-
-# large cached datasets beyond the shipped MUTAG demo
-data/PROTEINS/
-data/DD/
-data/NCI1/
-data/ENZYMES/
-data/IMDB-BINARY/
-data/IMDB-MULTI/

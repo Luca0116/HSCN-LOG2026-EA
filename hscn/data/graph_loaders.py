@@ -9,7 +9,10 @@ from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.utils import degree
 
-from hscn.embeddings.sarkar import precompute_sarkar_for_graphs
+from hscn.embeddings.sarkar import (
+    precompute_euclidean_for_graphs,
+    precompute_sarkar_for_graphs,
+)
 
 # Social / collaboration TU graphs with no native node attributes.
 # PathNN / Errica et al.: use one-hot node degrees instead of discrete labels.
@@ -308,20 +311,38 @@ def load_tu_graphs(
     precompute_sarkar: bool = True,
     sarkar_num_workers: int = 0,
     feature_policy: str = "auto",
+    geometry_mode: str = "hyperbolic",
 ):
-    """Load all graphs and metadata from a TU dataset with Sarkar positions."""
+    """Load TU graphs with topology-induced support positions as ``data.z``.
+
+    Uses the default PyG ``TUDataset`` node representation (``use_node_attr=False``).
+    IMDB-* graphs without native labels receive degree one-hot features.
+    """
+    if geometry_mode not in {"hyperbolic", "euclidean"}:
+        raise ValueError(
+            f"geometry_mode must be 'hyperbolic' or 'euclidean', got {geometry_mode!r}"
+        )
     ds = _load_tu_dataset(dataset, data_root)
     graphs = [ds[i] for i in range(len(ds))]
     labels = torch.tensor([int(g.y.item()) for g in graphs], dtype=torch.long)
     num_classes = int(labels.max().item()) + 1
     in_dim = ensure_tu_node_features(dataset, graphs, feature_policy=feature_policy)
     if precompute_sarkar:
-        precompute_sarkar_for_graphs(
-            graphs,
-            tau=sarkar_tau,
-            radius=sarkar_radius,
-            root=sarkar_root,
-            num_workers=sarkar_num_workers,
-            verbose=True,
-        )
+        if geometry_mode == "euclidean":
+            precompute_euclidean_for_graphs(
+                graphs,
+                tau=sarkar_tau,
+                root=sarkar_root,
+                num_workers=sarkar_num_workers,
+                verbose=True,
+            )
+        else:
+            precompute_sarkar_for_graphs(
+                graphs,
+                tau=sarkar_tau,
+                radius=sarkar_radius,
+                root=sarkar_root,
+                num_workers=sarkar_num_workers,
+                verbose=True,
+            )
     return graphs, labels, num_classes, in_dim

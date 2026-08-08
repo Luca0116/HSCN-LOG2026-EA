@@ -51,10 +51,8 @@ class GraphReadout(nn.Module):
         hidden_dim: int,
         mode: str = "mean",
         dropout: float = 0.0,
-        **_kwargs,
     ) -> None:
         super().__init__()
-        del _kwargs
 
         if mode not in {"mean", "sum"}:
             raise ValueError(

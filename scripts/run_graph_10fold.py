@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-10-fold stratified CV for HSCN graph classification (GNN benchmark protocol).
+One-seed × 10-fold stratified CV for HSCN graph classification.
 
 Each fold:
     ~81% train / ~9% val / ~10% test (stratified)
     early stopping on validation
-    report test accuracy at best validation
+    report test accuracy at the best-validation checkpoint
 
-Aggregated result: mean +/- std over folds.
+This script aggregates mean ± std **over folds** for a single seed.
+For the paper Table 1 protocol (mean ± std **across five seeds**), use
+``scripts/run_paper_seeds.py``.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ from hscn.data.graph_loaders import (
 from hscn.graph_task import train_graph_fold
 from hscn.models.hscn_graph import CLASSIFIER_MODES, HSCNGraphClassifier
 from hscn.nn.graph_readout import READOUT_MODES
+from hscn.nn.hscn_layer import GEOMETRY_MODES, MULTIPLIER_MODES
 from hscn.utils.seed import set_seed
 
 
@@ -199,15 +202,38 @@ def parse_args() -> argparse.Namespace:
         default=cfg_default("classifier_mode", "mlp"),
         choices=sorted(CLASSIFIER_MODES),
     )
+    _n_hidden = cfg_default(
+        "classifier_num_hidden_layers",
+        cfg_default("classifier_num_layers", 2),
+    )
+    parser.add_argument(
+        "--classifier_num_hidden_layers",
+        type=int,
+        default=_n_hidden,
+        help="Number of hidden layers in the MLP classifier (paper: 2 × width 256).",
+    )
     parser.add_argument(
         "--classifier_num_layers",
         type=int,
-        default=cfg_default("classifier_num_layers", 2),
+        default=None,
+        help="Deprecated alias for --classifier_num_hidden_layers.",
     )
     parser.add_argument(
         "--classifier_hidden_dim",
         type=int,
         default=cfg_default("classifier_hidden_dim", 256),
+    )
+    parser.add_argument(
+        "--geometry_mode",
+        type=str,
+        default=cfg_default("geometry_mode", "hyperbolic"),
+        choices=sorted(GEOMETRY_MODES),
+    )
+    parser.add_argument(
+        "--multiplier_mode",
+        type=str,
+        default=cfg_default("multiplier_mode", "full"),
+        choices=sorted(MULTIPLIER_MODES),
     )
     parser.add_argument(
         "--complex_pair_mode",
@@ -271,6 +297,9 @@ def resolve_device(device: str) -> torch.device:
 def build_model(args, in_dim: int, num_classes: int, device: torch.device):
     if args.learnable_scales:
         raise ValueError("Paper release requires learnable_scales=False.")
+    n_hidden = args.classifier_num_hidden_layers
+    if args.classifier_num_layers is not None:
+        n_hidden = args.classifier_num_layers
     return HSCNGraphClassifier(
         in_dim=in_dim,
         num_classes=num_classes,
@@ -299,7 +328,7 @@ def build_model(args, in_dim: int, num_classes: int, device: torch.device):
         readout_mode=args.readout_mode,
         readout_dropout=args.readout_dropout,
         classifier_mode="mlp",
-        classifier_num_layers=args.classifier_num_layers,
+        classifier_num_hidden_layers=n_hidden,
         classifier_hidden_dim=args.classifier_hidden_dim,
         complex_pair_mode="reim",
         use_post_conv_mlp=args.use_post_conv_mlp,
@@ -307,6 +336,8 @@ def build_model(args, in_dim: int, num_classes: int, device: torch.device):
         post_conv_dropout=args.post_conv_dropout,
         layer_hidden_dims=args.layer_hidden_dims,
         channel_pattern=args.channel_pattern,
+        geometry_mode=args.geometry_mode,
+        multiplier_mode=args.multiplier_mode,
     ).to(device)
 
 
@@ -321,6 +352,7 @@ def main() -> None:
         sarkar_tau=args.sarkar_tau,
         sarkar_root=args.sarkar_root,
         sarkar_radius=args.radius,
+        geometry_mode=args.geometry_mode,
     )
     fold_masks = stratified_kfold_masks(
         labels,
@@ -333,10 +365,16 @@ def main() -> None:
     if args.fold is not None:
         if args.fold < 0 or args.fold >= args.n_folds:
             raise ValueError(f"fold must be in [0, {args.n_folds}), got {args.fold}")
-        run_dir = Path(args.out_dir) / f"{args.dataset.lower()}_fold{args.fold:02d}_{run_name}"
+        run_dir = (
+            Path(args.out_dir)
+            / f"{args.dataset.lower()}_fold{args.fold:02d}_{run_name}_seed{args.seed}"
+        )
         fold_indices = [args.fold]
     else:
-        run_dir = Path(args.out_dir) / f"{args.dataset.lower()}_10fold_{run_name}"
+        run_dir = (
+            Path(args.out_dir)
+            / f"{args.dataset.lower()}_10fold_{run_name}_seed{args.seed}"
+        )
         fold_indices = list(range(args.n_folds))
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -355,7 +393,8 @@ def main() -> None:
     print("selection=test @ best val per fold")
     print(
         f"model=HSCNGraphClassifier readout={args.readout_mode} "
-        f"sigma={args.sigma} complex_pair=reim norm=pre"
+        f"geometry={args.geometry_mode} multiplier={args.multiplier_mode} "
+        f"complex_pair=reim norm=pre"
     )
     print(f"run_dir={run_dir}")
 
@@ -429,7 +468,11 @@ def main() -> None:
         "run_dir": str(run_dir),
         "n_folds": args.n_folds,
         "val_ratio_within_trainval": args.val_ratio_within_trainval,
-        "protocol": "stratified 10-fold; early stop on val; report test @ best val",
+        "protocol": (
+            "single-seed stratified 10-fold; early stop on val; "
+            "report test @ best val; mean±std over folds"
+        ),
+        "aggregation": "over_folds",
         "seed": int(args.seed),
         "mean_test_acc": float(tests.mean()),
         "std_test_acc": float(tests.std(ddof=0)),

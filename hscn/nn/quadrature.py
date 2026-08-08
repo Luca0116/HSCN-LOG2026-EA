@@ -1,3 +1,5 @@
+"""Discrete quadrature helpers for Helgason–Fourier layers."""
+
 from __future__ import annotations
 
 import math
@@ -5,48 +7,12 @@ import math
 import torch
 
 
-def make_masked_node_quadrature_weights(
-    num_nodes: int,
-    mask: torch.Tensor,
-    dtype: torch.dtype = torch.float32,
-    device: torch.device | None = None,
-) -> torch.Tensor:
-    """
-    Build node quadrature weights that sum only over masked nodes.
-
-    Masked-out nodes receive weight 0 and do not contribute to the forward
-    Helgason quadrature. ``HSCNLayer`` renormalizes weights to sum to 1.
-
-    Args:
-        num_nodes: number of graph nodes N.
-        mask: bool tensor [N]; True marks nodes included in quadrature.
-    """
-    if mask.numel() != num_nodes:
-        raise ValueError(
-            f"mask length must equal num_nodes={num_nodes}, got {mask.numel()}"
-        )
-    if device is None:
-        device = mask.device
-    mask = mask.to(device=device, dtype=torch.bool)
-    if not bool(mask.any()):
-        raise ValueError("quadrature mask must include at least one node.")
-    weights = torch.zeros(num_nodes, dtype=dtype, device=device)
-    weights[mask] = 1.0
-    return weights
-
-
 def make_lambda_quadrature(
     num_lambdas: int,
     lambda_max: float,
     dtype: torch.dtype = torch.float32,
 ):
-    """
-    Simple trapezoidal quadrature on [0, lambda_max].
-
-    Returns:
-        lambdas: [M]
-        weights: [M]
-    """
+    """Trapezoidal quadrature on [0, lambda_max]."""
     if num_lambdas <= 0:
         raise ValueError("num_lambdas must be positive.")
     if lambda_max <= 0:
@@ -71,19 +37,7 @@ def make_sphere_quadrature(
     dtype: torch.dtype = torch.float32,
     seed: int = 12345,
 ):
-    """
-    Approximate integration over S^{dim-1}.
-
-    For dim=2:
-        use evenly spaced angles on the unit circle.
-
-    For dim>2:
-        use fixed random normalized Gaussian directions.
-
-    Returns:
-        directions: [R, dim]
-        weights: [R]
-    """
+    """Approximate integration over S^{dim-1}."""
     if num_directions <= 0:
         raise ValueError("num_directions must be positive.")
     if dim <= 0:
@@ -121,21 +75,7 @@ def make_diffusion_scales(
     mode: str = "logspace",
     dtype: torch.dtype = torch.float32,
 ):
-    """
-    Build fixed diffusion scales rho_k for the radial wavelet basis.
-
-    Modes:
-        logspace:
-            rho_k on a uniform grid in log10([min_scale, max_scale]).
-        linear:
-            rho_k uniformly spaced in [min_scale, max_scale].
-        octave:
-            rho_k = 2^e_k with e_k uniform in [log2(min_scale), log2(max_scale)].
-            Dyadic / octave-style spacing (endpoints pinned to min/max).
-
-    Returns:
-        scales: [K]
-    """
+    """Fixed diffusion scales ρ_k for the radial heat basis."""
     if num_scales <= 0:
         raise ValueError("num_scales must be positive.")
     if min_scale <= 0 or max_scale <= 0:

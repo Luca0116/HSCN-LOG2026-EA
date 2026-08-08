@@ -79,21 +79,18 @@ def train_graph_fold(
     """
     Train one fold with validation-based early stopping.
 
-    Returns test accuracy at the epoch with best validation accuracy.
+    The test loader is evaluated once after training, on the best-val checkpoint.
     """
     optimizer = build_optimizer(model, args)
-    scheduler_factor = float(getattr(args, "lr_factor", 0.5))
-    scheduler_min_lr = float(getattr(args, "lr_min", 1e-5))
     scheduler = ReduceLROnPlateau(
         optimizer,
         mode="max",
-        factor=scheduler_factor,
+        factor=float(getattr(args, "lr_factor", 0.5)),
         patience=args.lr_patience,
-        min_lr=scheduler_min_lr,
+        min_lr=float(getattr(args, "lr_min", 1e-5)),
     )
 
     best_val = -1.0
-    best_test_at_val = 0.0
     best_train_at_val = 0.0
     best_epoch = 0
     best_state: Optional[Dict[str, torch.Tensor]] = None
@@ -116,13 +113,11 @@ def train_graph_fold(
         else:
             train_metrics = {"acc": float("nan"), "loss": float("nan")}
         val_metrics = evaluate(model, val_loader, device)
-        test_metrics = evaluate(model, test_loader, device)
         scheduler.step(val_metrics["acc"])
 
         if epoch >= min_epochs_for_best and val_metrics["acc"] > best_val:
             best_val = val_metrics["acc"]
             best_epoch = epoch
-            best_test_at_val = test_metrics["acc"]
             best_train_at_val = (
                 train_metrics["acc"]
                 if eval_train_every > 0
@@ -139,7 +134,7 @@ def train_graph_fold(
             lr = optimizer.param_groups[0]["lr"]
             print(
                 f"  epoch={epoch:4d} loss={loss:.4f} train={train_metrics['acc']:.4f} "
-                f"val={val_metrics['acc']:.4f} test={test_metrics['acc']:.4f} lr={lr:.6f}"
+                f"val={val_metrics['acc']:.4f} lr={lr:.6f}"
             )
 
         if on_epoch_end is not None:
@@ -149,9 +144,7 @@ def train_graph_fold(
                     "loss": loss,
                     "train_acc": train_metrics["acc"],
                     "val_acc": val_metrics["acc"],
-                    "test_acc": test_metrics["acc"],
                     "best_val_acc": best_val,
-                    "test_acc_at_best_val": best_test_at_val,
                     "bad_epochs": bad_epochs,
                     "lr": optimizer.param_groups[0]["lr"],
                 }
@@ -164,10 +157,11 @@ def train_graph_fold(
 
     if best_state is not None:
         model.load_state_dict(best_state)
+    test_metrics = evaluate(model, test_loader, device)
 
     return {
         "best_epoch": float(best_epoch),
         "best_val_acc": best_val,
-        "test_acc_at_best_val": best_test_at_val,
+        "test_acc_at_best_val": test_metrics["acc"],
         "train_acc_at_best_val": best_train_at_val,
     }
