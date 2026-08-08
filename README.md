@@ -93,6 +93,20 @@ configs/ablations/{mutag,proteins,enzymes}_{flat,euclidean}.yaml
 ```
 
 
+## Expected results (Table 1, five seeds)
+
+Mean ± std across seeds `{42,0,1,2,3}` (test @ best val):
+
+| Dataset | Acc (%) |
+|---------|---------|
+| MUTAG | 81.55 ± 2.22 |
+| PROTEINS | 75.36 ± 1.14 |
+| DD | 75.98 ± 0.49 |
+| NCI1 | 73.35 ± 0.41 |
+| IMDB-BINARY | 72.10 ± 0.59 |
+| IMDB-MULTI | 49.76 ± 0.67 |
+| ENZYMES | 36.77 ± 1.50 |
+
 A single `run_graph_10fold.py` call reports fold std for one seed and will **not** match the ± column above.
 
 ## Package layout
