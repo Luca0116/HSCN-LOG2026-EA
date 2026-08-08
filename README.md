@@ -103,8 +103,8 @@ Mean ± std across seeds `{42,0,1,2,3}` (test @ best val):
 | PROTEINS | 75.36 ± 1.14 |
 | DD | 75.98 ± 0.49 |
 | NCI1 | 73.35 ± 0.41 |
-| IMDB-BINARY | 72.10 ± 0.59 |
-| IMDB-MULTI | 49.76 ± 0.67 |
+| IMDB-BINARY | 73.02 ± 0.61 |
+| IMDB-MULTI | 49.98 ± 0.45 |
 | ENZYMES | 36.77 ± 1.50 |
 
 A single `run_graph_10fold.py` call reports fold std for one seed and will **not** match the ± column above.
