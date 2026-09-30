@@ -1,6 +1,6 @@
 # HSCN — Hyperbolic Spectral Convolutional Network
 
-Anonymous code release for the LoG 2026 Extended Abstract.
+Code release for the LoG 2026 Extended Abstract.
 
 Topology is mapped to a **Sarkar-inspired BFS-tree hyperbolic support** on the Poincaré disk; node features are ordinary Euclidean signals filtered by Helgason–Fourier spectral convolution (multi-scale heat multipliers), then pooled and classified by an MLP.
 
